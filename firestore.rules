@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper to check if a user is logged in
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper to check if a user is a member of the house
+    function isHouseMember(houseId) {
+      return exists(/databases/$(database)/documents/houseMembers/$(houseId)_$(request.auth.uid)) ||
+             // or by querying houseMembers where houseId == houseId and userId == request.auth.uid
+             // Simplified for MVP: rely on users document houseIds array
+             houseId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.houseIds;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      // Users can only read and write their own profile
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Houses Collection
+    match /houses/{houseId} {
+      allow create: if isAuthenticated();
+      // Only members can read or update their house
+      allow read, update: if isAuthenticated() && isHouseMember(houseId);
+      allow delete: if false; // No deletion in MVP
+    }
+
+    // House Members Collection
+    match /houseMembers/{memberId} {
+      allow create: if isAuthenticated();
+      // Allow read if the user is a member of the house
+      allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      allow update, delete: if isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    // Tasks Collection
+    match /tasks/{taskId} {
+      allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
+      allow read, update, delete: if isAuthenticated() && isHouseMember(resource.data.houseId);
+    }
+
+    // Task Completions Collection
+    match /taskCompletions/{completionId} {
+      allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
+      allow read, update, delete: if isAuthenticated() && isHouseMember(resource.data.houseId);
+    }
+  }
+}

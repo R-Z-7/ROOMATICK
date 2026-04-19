@@ -164,11 +164,11 @@ export default function TasksPage() {
         </div>
         
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
+          <DialogTrigger render={
             <Button className="gap-2">
               <Plus className="h-4 w-4" /> New Task
             </Button>
-          </DialogTrigger>
+          } />
           <DialogContent className="sm:max-w-[425px]">
             <DialogHeader>
               <DialogTitle>Create a new task</DialogTitle>
@@ -236,7 +236,7 @@ export default function TasksPage() {
 
               <div className="space-y-2">
                 <Label>Assignee</Label>
-                <Select value={assigneeId} onValueChange={setAssigneeId}>
+                <Select value={assigneeId} onValueChange={(val: any) => setAssigneeId(val || "any")}>
                   <SelectTrigger>
                     <SelectValue placeholder="Assignee" />
                   </SelectTrigger>

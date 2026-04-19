@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useHouse } from "@/contexts/HouseContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,12 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { doc, setDoc, getDoc, collection, addDoc, updateDoc, arrayUnion } from "firebase/firestore";
+import { doc, setDoc, collection, addDoc, updateDoc, arrayUnion, query, where, getDocs, orderBy, limit } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { Task, TaskCompletion } from "@/lib/types";
+import { isToday, isPast, format } from "date-fns";
+import { CheckCircle2, Clock, Trash2, CalendarIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
 export default function DashboardPage() {
   const { houses, activeHouse, loading, refreshHouseData } = useHouse();
@@ -19,9 +23,38 @@ export default function DashboardPage() {
   const [inviteCode, setInviteCode] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
 
-  if (loading) {
-    return <div className="flex h-full items-center justify-center">Loading dashboard...</div>;
-  }
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [completions, setCompletions] = useState<TaskCompletion[]>([]);
+
+  const fetchData = async () => {
+    if (!activeHouse) return;
+    try {
+      // Fetch Tasks
+      const q = query(
+        collection(db, "tasks"), 
+        where("houseId", "==", activeHouse.id),
+        where("status", "in", ["pending", "overdue"])
+      );
+      const snapshot = await getDocs(q);
+      const fetchedTasks = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Task[];
+      setTasks(fetchedTasks);
+
+      // Fetch Recent Completions
+      const compQ = query(
+        collection(db, "taskCompletions"),
+        where("houseId", "==", activeHouse.id),
+        where("dateString", "==", format(new Date(), "yyyy-MM-dd"))
+      );
+      const compSnap = await getDocs(compQ);
+      setCompletions(compSnap.docs.map(d => ({ id: d.id, ...d.data() })) as TaskCompletion[]);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, [activeHouse]);
 
   const handleCreateHouse = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,11 +93,39 @@ export default function DashboardPage() {
 
   const handleJoinHouse = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Implementation for joining house using invite code
     toast.error("Joining via invite code not fully implemented yet in MVP");
   };
 
+  const handleBinFull = async () => {
+    if (!activeHouse || !user) return;
+    setActionLoading(true);
+    try {
+      await addDoc(collection(db, "tasks"), {
+        houseId: activeHouse.id,
+        title: "Take out the bin (Bin Full!)",
+        category: "rubbish/bin",
+        assigneeId: "",
+        frequency: "once",
+        priority: "urgent",
+        status: "pending",
+        dueDate: new Date(), // Due today
+        createdAt: new Date(),
+      });
+      toast.success("Bin full! Urgent task created.");
+      fetchData();
+    } catch (error) {
+      toast.error("Failed to create bin task");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="flex h-full items-center justify-center">Loading dashboard...</div>;
+  }
+
   if (houses.length === 0) {
+    // ... [Onboarding logic rendered here]
     return (
       <div className="max-w-4xl mx-auto mt-10">
         <div className="text-center mb-10">
@@ -129,16 +190,23 @@ export default function DashboardPage() {
     );
   }
 
-  // Dashboard View
+  const dueTodayTasks = tasks.filter(t => isToday(t.dueDate.toDate()) && t.status !== "completed");
+  const overdueTasks = tasks.filter(t => isPast(t.dueDate.toDate()) && !isToday(t.dueDate.toDate()) && t.status !== "completed");
+  const userCompletions = completions.filter(c => c.completedBy === user?.uid).length;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-6xl mx-auto">
       <div className="flex justify-between items-end">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-zinc-500">Welcome to {activeHouse?.name}</p>
         </div>
-        <Button className="bg-red-600 hover:bg-red-700 text-white gap-2">
-          🗑️ Bin Full!
+        <Button 
+          className="bg-red-600 hover:bg-red-700 text-white gap-2 font-bold shadow-lg"
+          onClick={handleBinFull}
+          disabled={actionLoading}
+        >
+          <Trash2 className="h-5 w-5" /> Bin Full!
         </Button>
       </div>
 
@@ -148,31 +216,33 @@ export default function DashboardPage() {
             <CardTitle className="text-sm font-medium">Tasks Due Today</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">3</div>
+            <div className="text-2xl font-bold">{dueTodayTasks.length}</div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className={overdueTasks.length > 0 ? "border-red-200 bg-red-50/50 dark:border-red-900/50 dark:bg-red-900/10" : ""}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Overdue Tasks</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">1</div>
+            <div className={`text-2xl font-bold ${overdueTasks.length > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+              {overdueTasks.length}
+            </div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Completed Today</CardTitle>
+            <CardTitle className="text-sm font-medium">House Completions Today</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">2</div>
+            <div className="text-2xl font-bold text-green-600">{completions.length}</div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Your Completion Rate</CardTitle>
+            <CardTitle className="text-sm font-medium">Your Completions Today</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">85%</div>
+            <div className="text-2xl font-bold">{userCompletions}</div>
           </CardContent>
         </Card>
       </div>
@@ -180,18 +250,71 @@ export default function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <Card className="col-span-4">
           <CardHeader>
-            <CardTitle>Today's Chores</CardTitle>
+            <CardTitle>Today's Focus</CardTitle>
+            <CardDescription>Chores that need attention right now</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-zinc-500">Task list will appear here.</p>
+            {dueTodayTasks.length === 0 && overdueTasks.length === 0 ? (
+              <div className="py-8 text-center text-zinc-500 flex flex-col items-center">
+                <CheckCircle2 className="h-8 w-8 text-zinc-300 mb-2" />
+                No tasks due today. Great job!
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {[...overdueTasks, ...dueTodayTasks].slice(0, 5).map(task => {
+                  const overdue = isPast(task.dueDate.toDate()) && !isToday(task.dueDate.toDate());
+                  return (
+                    <div key={task.id} className="flex items-center justify-between p-3 border rounded-lg bg-white dark:bg-zinc-900">
+                      <div className="flex items-center gap-3">
+                        {task.priority === "urgent" ? (
+                          <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
+                        ) : overdue ? (
+                          <Clock className="w-4 h-4 text-red-500" />
+                        ) : (
+                          <div className="w-2 h-2 rounded-full bg-amber-500" />
+                        )}
+                        <div>
+                          <p className="font-medium text-sm">{task.title}</p>
+                          <p className="text-xs text-zinc-500 capitalize">{task.category}</p>
+                        </div>
+                      </div>
+                      <Badge variant={overdue ? "destructive" : task.priority === "urgent" ? "destructive" : "secondary"}>
+                        {overdue ? "Overdue" : "Due Today"}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
+        
         <Card className="col-span-3">
           <CardHeader>
-            <CardTitle>Recent Activity</CardTitle>
+            <CardTitle>Recent House Activity</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-zinc-500">Activity feed will appear here.</p>
+            {completions.length === 0 ? (
+              <div className="py-8 text-center text-zinc-500">
+                No activity today yet.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {completions.map(c => (
+                  <div key={c.id} className="flex items-start gap-3">
+                    <div className="mt-0.5 bg-green-100 dark:bg-green-900/30 p-1.5 rounded-full">
+                      <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm">
+                        <span className="font-medium">{c.completedBy === user?.uid ? "You" : "Someone"}</span> completed a task
+                      </p>
+                      <p className="text-xs text-zinc-500">{format(c.completedAt.toDate(), "h:mm a")}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
