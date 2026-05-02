@@ -8,17 +8,20 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { doc, setDoc, collection, addDoc, updateDoc, arrayUnion, query, where, getDocs, orderBy, limit } from "firebase/firestore";
+import {
+  doc, collection, addDoc, updateDoc, arrayUnion,
+  query, where, getDocs,
+} from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Task, TaskCompletion } from "@/lib/types";
 import { isToday, isPast, format } from "date-fns";
-import { CheckCircle2, Clock, Trash2, CalendarIcon } from "lucide-react";
+import { CheckCircle2, Clock, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 export default function DashboardPage() {
-  const { houses, activeHouse, loading, refreshHouseData } = useHouse();
+  const { houses, activeHouse, loading, refreshHouseData, memberProfiles } = useHouse();
   const { user, userData } = useAuth();
-  
+
   const [houseName, setHouseName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
@@ -29,24 +32,23 @@ export default function DashboardPage() {
   const fetchData = async () => {
     if (!activeHouse) return;
     try {
-      // Fetch Tasks
       const q = query(
-        collection(db, "tasks"), 
+        collection(db, "tasks"),
         where("houseId", "==", activeHouse.id),
         where("status", "in", ["pending", "overdue"])
       );
       const snapshot = await getDocs(q);
-      const fetchedTasks = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Task[];
-      setTasks(fetchedTasks);
+      setTasks(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as Task[]);
 
-      // Fetch Recent Completions
       const compQ = query(
         collection(db, "taskCompletions"),
         where("houseId", "==", activeHouse.id),
         where("dateString", "==", format(new Date(), "yyyy-MM-dd"))
       );
       const compSnap = await getDocs(compQ);
-      setCompletions(compSnap.docs.map(d => ({ id: d.id, ...d.data() })) as TaskCompletion[]);
+      const comps = compSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as TaskCompletion[];
+      comps.sort((a, b) => b.completedAt.toMillis() - a.completedAt.toMillis());
+      setCompletions(comps);
     } catch (error) {
       console.error(error);
     }
@@ -54,16 +56,17 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeHouse]);
 
   const handleCreateHouse = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !userData) return;
-    
+
     setActionLoading(true);
     try {
       const generatedCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      
+
       const houseRef = await addDoc(collection(db, "houses"), {
         name: houseName,
         inviteCode: generatedCode,
@@ -79,11 +82,12 @@ export default function DashboardPage() {
       });
 
       await updateDoc(doc(db, "users", user.uid), {
-        houseIds: arrayUnion(houseRef.id)
+        houseIds: arrayUnion(houseRef.id),
       });
 
-      toast.success("House created successfully!");
-      await refreshHouseData();
+      toast.success("House created! Welcome home.");
+      setHouseName("");
+      // AuthContext onSnapshot will pick up the houseIds change and HouseContext will auto-refresh
     } catch (error: any) {
       toast.error(error.message || "Failed to create house");
     } finally {
@@ -93,7 +97,54 @@ export default function DashboardPage() {
 
   const handleJoinHouse = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast.error("Joining via invite code not fully implemented yet in MVP");
+    if (!user || !userData) return;
+
+    const code = inviteCode.trim().toUpperCase();
+    if (!code) return;
+
+    setActionLoading(true);
+    try {
+      // Find the house with this invite code
+      const q = query(
+        collection(db, "houses"),
+        where("inviteCode", "==", code)
+      );
+      const snapshot = await getDocs(q);
+
+      if (snapshot.empty) {
+        toast.error("Invalid invite code. Please check and try again.");
+        return;
+      }
+
+      const houseDoc = snapshot.docs[0];
+      const houseId = houseDoc.id;
+
+      // Check if user is already a member
+      if (userData.houseIds.includes(houseId)) {
+        toast.error("You are already a member of this house.");
+        return;
+      }
+
+      // Add user to houseMembers
+      await addDoc(collection(db, "houseMembers"), {
+        houseId,
+        userId: user.uid,
+        role: "member",
+        joinedAt: new Date(),
+      });
+
+      // Update user's houseIds — AuthContext onSnapshot will detect this and propagate
+      await updateDoc(doc(db, "users", user.uid), {
+        houseIds: arrayUnion(houseId),
+      });
+
+      toast.success(`Joined "${houseDoc.data().name}" successfully!`);
+      setInviteCode("");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to join house");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleBinFull = async () => {
@@ -108,12 +159,12 @@ export default function DashboardPage() {
         frequency: "once",
         priority: "urgent",
         status: "pending",
-        dueDate: new Date(), // Due today
+        dueDate: new Date(),
         createdAt: new Date(),
       });
-      toast.success("Bin full! Urgent task created.");
+      toast.success("Urgent bin task created!");
       fetchData();
-    } catch (error) {
+    } catch {
       toast.error("Failed to create bin task");
     } finally {
       setActionLoading(false);
@@ -125,14 +176,13 @@ export default function DashboardPage() {
   }
 
   if (houses.length === 0) {
-    // ... [Onboarding logic rendered here]
     return (
       <div className="max-w-4xl mx-auto mt-10">
         <div className="text-center mb-10">
           <h1 className="text-3xl font-bold tracking-tight mb-2">Welcome to RoomaTick!</h1>
           <p className="text-zinc-500">To get started, create a new house or join an existing one.</p>
         </div>
-        
+
         <div className="grid md:grid-cols-2 gap-8">
           <Card>
             <CardHeader>
@@ -143,10 +193,10 @@ export default function DashboardPage() {
               <CardContent>
                 <div className="space-y-2">
                   <Label htmlFor="houseName">House / Flat Name</Label>
-                  <Input 
-                    id="houseName" 
-                    placeholder="e.g. The Green House" 
-                    required 
+                  <Input
+                    id="houseName"
+                    placeholder="e.g. The Green House"
+                    required
                     value={houseName}
                     onChange={(e) => setHouseName(e.target.value)}
                   />
@@ -169,18 +219,19 @@ export default function DashboardPage() {
               <CardContent>
                 <div className="space-y-2">
                   <Label htmlFor="inviteCode">Invite Code</Label>
-                  <Input 
-                    id="inviteCode" 
-                    placeholder="e.g. A1B2C3" 
-                    required 
+                  <Input
+                    id="inviteCode"
+                    placeholder="e.g. A1B2C3"
+                    required
                     value={inviteCode}
-                    onChange={(e) => setInviteCode(e.target.value)}
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                    maxLength={6}
                   />
                 </div>
               </CardContent>
               <CardFooter>
                 <Button type="submit" variant="outline" disabled={actionLoading}>
-                  Join House
+                  {actionLoading ? "Joining..." : "Join House"}
                 </Button>
               </CardFooter>
             </form>
@@ -190,9 +241,13 @@ export default function DashboardPage() {
     );
   }
 
-  const dueTodayTasks = tasks.filter(t => isToday(t.dueDate.toDate()) && t.status !== "completed");
-  const overdueTasks = tasks.filter(t => isPast(t.dueDate.toDate()) && !isToday(t.dueDate.toDate()) && t.status !== "completed");
-  const userCompletions = completions.filter(c => c.completedBy === user?.uid).length;
+  const dueTodayTasks = tasks.filter(
+    (t) => isToday(t.dueDate.toDate()) && t.status !== "completed"
+  );
+  const overdueTasks = tasks.filter(
+    (t) => isPast(t.dueDate.toDate()) && !isToday(t.dueDate.toDate()) && t.status !== "completed"
+  );
+  const userCompletions = completions.filter((c) => c.completedBy === user?.uid).length;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -201,7 +256,7 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-zinc-500">Welcome to {activeHouse?.name}</p>
         </div>
-        <Button 
+        <Button
           className="bg-red-600 hover:bg-red-700 text-white gap-2 font-bold shadow-lg"
           onClick={handleBinFull}
           disabled={actionLoading}
@@ -250,7 +305,7 @@ export default function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <Card className="col-span-4">
           <CardHeader>
-            <CardTitle>Today's Focus</CardTitle>
+            <CardTitle>Today&apos;s Focus</CardTitle>
             <CardDescription>Chores that need attention right now</CardDescription>
           </CardHeader>
           <CardContent>
@@ -261,10 +316,13 @@ export default function DashboardPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {[...overdueTasks, ...dueTodayTasks].slice(0, 5).map(task => {
+                {[...overdueTasks, ...dueTodayTasks].slice(0, 5).map((task) => {
                   const overdue = isPast(task.dueDate.toDate()) && !isToday(task.dueDate.toDate());
                   return (
-                    <div key={task.id} className="flex items-center justify-between p-3 border rounded-lg bg-white dark:bg-zinc-900">
+                    <div
+                      key={task.id}
+                      className="flex items-center justify-between p-3 border rounded-lg bg-white dark:bg-zinc-900"
+                    >
                       <div className="flex items-center gap-3">
                         {task.priority === "urgent" ? (
                           <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
@@ -278,7 +336,7 @@ export default function DashboardPage() {
                           <p className="text-xs text-zinc-500 capitalize">{task.category}</p>
                         </div>
                       </div>
-                      <Badge variant={overdue ? "destructive" : task.priority === "urgent" ? "destructive" : "secondary"}>
+                      <Badge variant={overdue || task.priority === "urgent" ? "destructive" : "secondary"}>
                         {overdue ? "Overdue" : "Due Today"}
                       </Badge>
                     </div>
@@ -288,31 +346,35 @@ export default function DashboardPage() {
             )}
           </CardContent>
         </Card>
-        
+
         <Card className="col-span-3">
           <CardHeader>
             <CardTitle>Recent House Activity</CardTitle>
           </CardHeader>
           <CardContent>
             {completions.length === 0 ? (
-              <div className="py-8 text-center text-zinc-500">
-                No activity today yet.
-              </div>
+              <div className="py-8 text-center text-zinc-500">No activity today yet.</div>
             ) : (
               <div className="space-y-4">
-                {completions.map(c => (
-                  <div key={c.id} className="flex items-start gap-3">
-                    <div className="mt-0.5 bg-green-100 dark:bg-green-900/30 p-1.5 rounded-full">
-                      <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+                {completions.map((c) => {
+                  const name = c.completedBy === user?.uid
+                    ? "You"
+                    : memberProfiles[c.completedBy] || c.completedByName || "A roommate";
+                  return (
+                    <div key={c.id} className="flex items-start gap-3">
+                      <div className="mt-0.5 bg-green-100 dark:bg-green-900/30 p-1.5 rounded-full">
+                        <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+                      </div>
+                      <div>
+                        <p className="text-sm">
+                          <span className="font-medium">{name}</span> completed{" "}
+                          <span className="font-medium">{c.taskTitle || "a task"}</span>
+                        </p>
+                        <p className="text-xs text-zinc-500">{format(c.completedAt.toDate(), "h:mm a")}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm">
-                        <span className="font-medium">{c.completedBy === user?.uid ? "You" : "Someone"}</span> completed a task
-                      </p>
-                      <p className="text-xs text-zinc-500">{format(c.completedAt.toDate(), "h:mm a")}</p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
