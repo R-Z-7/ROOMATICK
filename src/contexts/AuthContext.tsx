@@ -1,9 +1,9 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState, useRef } from "react";
 import { onAuthStateChanged, User, signOut as firebaseSignOut } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, setDoc, onSnapshot } from "firebase/firestore";
 
 interface AuthContextType {
   user: User | null;
@@ -32,35 +32,51 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
+  const docUnsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const authUnsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      // Clean up previous doc listener whenever auth state changes
+      if (docUnsubscribeRef.current) {
+        docUnsubscribeRef.current();
+        docUnsubscribeRef.current = null;
+      }
+
       setUser(firebaseUser);
+
       if (firebaseUser) {
-        // Fetch or create user document
         const userDocRef = doc(db, "users", firebaseUser.uid);
-        const userDoc = await getDoc(userDocRef);
-        
-        if (userDoc.exists()) {
-          setUserData(userDoc.data() as UserData);
-        } else {
-          // If no doc exists (might be just signed up via Google or slow signup), create basic one
-          const newUserData: UserData = {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || "",
-            displayName: firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User",
-            houseIds: [],
-          };
-          await setDoc(userDocRef, newUserData);
-          setUserData(newUserData);
-        }
+
+        // Subscribe to real-time user doc updates (catches houseIds changes after joining)
+        docUnsubscribeRef.current = onSnapshot(userDocRef, async (snap) => {
+          if (snap.exists()) {
+            setUserData(snap.data() as UserData);
+          } else {
+            // First sign-up: create user doc
+            const newUserData: UserData = {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || "",
+              displayName:
+                firebaseUser.displayName ||
+                firebaseUser.email?.split("@")[0] ||
+                "User",
+              houseIds: [],
+            };
+            await setDoc(userDocRef, newUserData);
+            setUserData(newUserData);
+          }
+          setLoading(false);
+        });
       } else {
         setUserData(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      authUnsubscribe();
+      if (docUnsubscribeRef.current) docUnsubscribeRef.current();
+    };
   }, []);
 
   const signOut = async () => {

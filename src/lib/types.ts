@@ -25,7 +25,9 @@ export interface TaskCompletion {
   taskId: string;
   houseId: string;
   completedBy: string;
+  completedByName: string;
   completedAt: any;
   dateString: string; // YYYY-MM-DD for easy querying
+  taskTitle: string;
   note?: string;
 }

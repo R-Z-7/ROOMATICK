@@ -16,6 +16,9 @@ const geistMono = localFont({
   weight: "100 900",
 });
 
+// Firebase is client-only — skip static prerendering for all routes
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "RoomaTick - Shared House Chores",
   description: "Manage shared house chores easily with roommates",

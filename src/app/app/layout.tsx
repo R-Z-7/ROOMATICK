@@ -1,5 +1,8 @@
 "use client";
 
+// All /app/* routes require auth + Firebase — skip static prerendering
+export const dynamic = "force-dynamic";
+
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
@@ -99,13 +102,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </main>
           
           {/* Mobile Bottom Nav */}
-          <nav className="md:hidden flex items-center justify-around p-3 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800">
-            {navigation.slice(0, 4).map((item) => {
+          <nav className="md:hidden flex items-center justify-around p-2 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800">
+            {navigation.map((item) => {
               const isActive = pathname === item.href;
               return (
-                <Link key={item.name} href={item.href} className="flex flex-col items-center gap-1">
+                <Link key={item.name} href={item.href} className="flex flex-col items-center gap-0.5 px-1">
                   <item.icon className={`h-5 w-5 ${isActive ? "text-green-600 dark:text-green-400" : "text-zinc-500"}`} />
-                  <span className={`text-[10px] ${isActive ? "text-green-600 dark:text-green-400 font-medium" : "text-zinc-500"}`}>
+                  <span className={`text-[9px] ${isActive ? "text-green-600 dark:text-green-400 font-medium" : "text-zinc-500"}`}>
                     {item.name}
                   </span>
                 </Link>

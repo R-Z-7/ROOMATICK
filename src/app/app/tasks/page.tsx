@@ -4,7 +4,10 @@ import { useState, useEffect } from "react";
 import { useHouse } from "@/contexts/HouseContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/firebase";
-import { collection, query, where, getDocs, addDoc, updateDoc, doc, orderBy } from "firebase/firestore";
+import {
+  collection, query, where, getDocs, addDoc,
+  updateDoc, deleteDoc, doc,
+} from "firebase/firestore";
 import { Task } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -14,17 +17,17 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { format, isPast, isToday, addDays, addWeeks, addMonths } from "date-fns";
-import { CheckCircle2, Clock, CalendarIcon, Plus } from "lucide-react";
+import { CheckCircle2, Clock, CalendarIcon, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 export default function TasksPage() {
-  const { activeHouse, members } = useHouse();
-  const { user } = useAuth();
-  
+  const { activeHouse, members, memberProfiles } = useHouse();
+  const { user, userData } = useAuth();
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  
+
   // Form state
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState<Task["category"]>("kitchen");
@@ -38,16 +41,15 @@ export default function TasksPage() {
     setLoading(true);
     try {
       const q = query(
-        collection(db, "tasks"), 
+        collection(db, "tasks"),
         where("houseId", "==", activeHouse.id),
         where("status", "in", ["pending", "overdue"])
       );
       const snapshot = await getDocs(q);
-      const fetchedTasks = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Task[];
-      
-      // Sort in memory since we didn't setup composite indexes yet
+      const fetchedTasks = snapshot.docs.map(
+        (d) => ({ id: d.id, ...d.data() }) as Task
+      );
       fetchedTasks.sort((a, b) => a.dueDate.toMillis() - b.dueDate.toMillis());
-      
       setTasks(fetchedTasks);
     } catch (error) {
       console.error("Error fetching tasks:", error);
@@ -59,6 +61,7 @@ export default function TasksPage() {
 
   useEffect(() => {
     fetchTasks();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeHouse]);
 
   const handleCreateTask = async (e: React.FormEvent) => {
@@ -66,9 +69,7 @@ export default function TasksPage() {
     if (!activeHouse || !user) return;
 
     try {
-      const taskDueDate = new Date(dueDate);
-      
-      const newTask = {
+      await addDoc(collection(db, "tasks"), {
         houseId: activeHouse.id,
         title,
         category,
@@ -76,81 +77,81 @@ export default function TasksPage() {
         frequency,
         priority,
         status: "pending",
-        dueDate: taskDueDate,
+        dueDate: new Date(dueDate),
         createdAt: new Date(),
-      };
-
-      await addDoc(collection(db, "tasks"), newTask);
+      });
       toast.success("Task created!");
       setIsDialogOpen(false);
-      
-      // Reset form
       setTitle("");
       setDueDate("");
-      
+      setCategory("kitchen");
+      setAssigneeId("any");
+      setFrequency("once");
+      setPriority("medium");
       fetchTasks();
-    } catch (error) {
+    } catch {
       toast.error("Failed to create task");
     }
   };
 
   const handleCompleteTask = async (task: Task) => {
-    if (!activeHouse || !user) return;
-    
+    if (!activeHouse || !user || !userData) return;
+
     try {
       const now = new Date();
-      
-      // 1. Create a completion record
+      const completedByName = userData.displayName || userData.email?.split("@")[0] || "User";
+
       await addDoc(collection(db, "taskCompletions"), {
         taskId: task.id,
         houseId: activeHouse.id,
         completedBy: user.uid,
+        completedByName,
         completedAt: now,
         dateString: format(now, "yyyy-MM-dd"),
+        taskTitle: task.title,
       });
 
-      // 2. Update task status or create next occurrence
       if (task.frequency === "once") {
         await updateDoc(doc(db, "tasks", task.id), {
           status: "completed",
           lastCompletedAt: now,
         });
+        toast.success("Task completed!");
       } else {
-        // Calculate next due date
+        const baseDate = isPast(task.dueDate.toDate()) ? now : task.dueDate.toDate();
         let nextDate = new Date();
-        const currentDueDate = task.dueDate.toDate();
-        
-        // If overdue, base next date on today, otherwise base on current due date
-        const baseDate = isPast(currentDueDate) ? now : currentDueDate;
-
         if (task.frequency === "daily") nextDate = addDays(baseDate, 1);
         if (task.frequency === "weekly") nextDate = addWeeks(baseDate, 1);
         if (task.frequency === "monthly") nextDate = addMonths(baseDate, 1);
 
         await updateDoc(doc(db, "tasks", task.id), {
           dueDate: nextDate,
-          status: "pending", // ensure it goes back to pending if it was overdue
+          status: "pending",
           lastCompletedAt: now,
         });
-        toast.success(`Task completed! Next due: ${format(nextDate, "MMM d")}`);
+        toast.success(`Done! Next due: ${format(nextDate, "MMM d")}`);
       }
-      
-      if (task.frequency === "once") {
-        toast.success("Task completed!");
-      }
-      
+
       fetchTasks();
-    } catch (error) {
+    } catch {
       toast.error("Failed to mark task complete");
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      await deleteDoc(doc(db, "tasks", taskId));
+      toast.success("Task deleted");
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    } catch {
+      toast.error("Failed to delete task");
     }
   };
 
   const getAssigneeName = (id: string) => {
     if (!id) return "Anyone";
-    const member = members.find(m => m.userId === id);
-    // Real app would fetch the user's name from `users` collection based on ID.
-    // For MVP, if we don't have it, we just show "Assigned"
-    return id === user?.uid ? "You" : "Assigned";
+    if (id === user?.uid) return "You";
+    return memberProfiles[id] || "Roommate";
   };
 
   if (!activeHouse) return <div>Please create or join a house first.</div>;
@@ -162,23 +163,31 @@ export default function TasksPage() {
           <h1 className="text-3xl font-bold tracking-tight">Chores & Tasks</h1>
           <p className="text-zinc-500">Manage what needs to be done around the house.</p>
         </div>
-        
+
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger render={
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" /> New Task
-            </Button>
-          } />
-          <DialogContent className="sm:max-w-[425px]">
+          <DialogTrigger
+            render={
+              <Button className="gap-2">
+                <Plus className="h-4 w-4" /> New Task
+              </Button>
+            }
+          />
+          <DialogContent className="sm:max-w-[460px]">
             <DialogHeader>
               <DialogTitle>Create a new task</DialogTitle>
             </DialogHeader>
             <form onSubmit={handleCreateTask} className="space-y-4 pt-4">
               <div className="space-y-2">
                 <Label htmlFor="title">Task Title</Label>
-                <Input id="title" value={title} onChange={e => setTitle(e.target.value)} required placeholder="e.g. Clean the kitchen" />
+                <Input
+                  id="title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  required
+                  placeholder="e.g. Clean the kitchen"
+                />
               </div>
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Category</Label>
@@ -216,7 +225,12 @@ export default function TasksPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Due Date</Label>
-                  <Input type="date" required value={dueDate} onChange={e => setDueDate(e.target.value)} />
+                  <Input
+                    type="date"
+                    required
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Priority</Label>
@@ -236,14 +250,19 @@ export default function TasksPage() {
 
               <div className="space-y-2">
                 <Label>Assignee</Label>
-                <Select value={assigneeId} onValueChange={(val: any) => setAssigneeId(val || "any")}>
+                <Select value={assigneeId} onValueChange={(val) => setAssigneeId(val || "any")}>
                   <SelectTrigger>
                     <SelectValue placeholder="Assignee" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="any">Anyone / Unassigned</SelectItem>
-                    {user && <SelectItem value={user.uid}>Me</SelectItem>}
-                    {/* Map other members here in a complete implementation */}
+                    {members.map((m) => (
+                      <SelectItem key={m.userId} value={m.userId}>
+                        {m.userId === user?.uid
+                          ? `Me (${memberProfiles[m.userId] || "You"})`
+                          : memberProfiles[m.userId] || "Roommate"}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -260,41 +279,77 @@ export default function TasksPage() {
         <div className="py-20 text-center bg-white dark:bg-zinc-900 rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700">
           <CheckCircle2 className="h-10 w-10 text-zinc-300 mx-auto mb-4" />
           <h3 className="text-lg font-medium">All caught up!</h3>
-          <p className="text-zinc-500 max-w-sm mx-auto mt-1">There are no pending tasks right now. Enjoy your clean house or create a new task.</p>
+          <p className="text-zinc-500 max-w-sm mx-auto mt-1">
+            No pending tasks. Enjoy your clean house or create a new one.
+          </p>
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {tasks.map(task => {
+          {tasks.map((task) => {
             const due = task.dueDate.toDate();
             const overdue = isPast(due) && !isToday(due);
             const today = isToday(due);
 
             return (
-              <Card key={task.id} className={`flex flex-col ${overdue ? 'border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-900/10' : ''}`}>
+              <Card
+                key={task.id}
+                className={`flex flex-col ${overdue ? "border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-900/10" : ""}`}
+              >
                 <CardHeader className="pb-2">
                   <div className="flex justify-between items-start">
-                    <Badge variant={task.priority === "urgent" ? "destructive" : "outline"} className="capitalize">
+                    <Badge
+                      variant={task.priority === "urgent" ? "destructive" : "outline"}
+                      className="capitalize"
+                    >
                       {task.category}
                     </Badge>
-                    {overdue ? (
-                      <Badge variant="destructive" className="flex items-center gap-1"><Clock className="w-3 h-3"/> Overdue</Badge>
-                    ) : today ? (
-                      <Badge className="bg-amber-500 hover:bg-amber-600 flex items-center gap-1"><Clock className="w-3 h-3"/> Today</Badge>
-                    ) : (
-                      <Badge variant="secondary" className="flex items-center gap-1"><CalendarIcon className="w-3 h-3"/> {format(due, "MMM d")}</Badge>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {overdue ? (
+                        <Badge variant="destructive" className="flex items-center gap-1">
+                          <Clock className="w-3 h-3" /> Overdue
+                        </Badge>
+                      ) : today ? (
+                        <Badge className="bg-amber-500 hover:bg-amber-600 flex items-center gap-1">
+                          <Clock className="w-3 h-3" /> Today
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                          <CalendarIcon className="w-3 h-3" /> {format(due, "MMM d")}
+                        </Badge>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-zinc-400 hover:text-red-500"
+                        onClick={() => handleDeleteTask(task.id)}
+                        title="Delete task"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
                   <CardTitle className="text-xl mt-2">{task.title}</CardTitle>
                 </CardHeader>
                 <CardContent className="flex-1">
                   <div className="text-sm text-zinc-500 space-y-1">
-                    <p>Assigned to: <span className="font-medium text-zinc-900 dark:text-zinc-100">{getAssigneeName(task.assigneeId!)}</span></p>
-                    <p>Frequency: <span className="capitalize">{task.frequency}</span></p>
+                    <p>
+                      Assigned to:{" "}
+                      <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                        {getAssigneeName(task.assigneeId!)}
+                      </span>
+                    </p>
+                    <p>
+                      Frequency: <span className="capitalize">{task.frequency}</span>
+                    </p>
                   </div>
                 </CardContent>
                 <CardFooter>
-                  <Button 
-                    className={`w-full gap-2 ${overdue ? "bg-red-600 hover:bg-red-700 text-white" : "bg-green-600 hover:bg-green-700 text-white"}`}
+                  <Button
+                    className={`w-full gap-2 ${
+                      overdue
+                        ? "bg-red-600 hover:bg-red-700 text-white"
+                        : "bg-green-600 hover:bg-green-700 text-white"
+                    }`}
                     onClick={() => handleCompleteTask(task)}
                   >
                     <CheckCircle2 className="w-5 h-5" /> Mark Complete
