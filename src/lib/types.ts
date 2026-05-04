@@ -12,12 +12,12 @@ export interface Task {
   description?: string;
   category: TaskCategory;
   assigneeId?: string | "rotation";
-  dueDate: any; // Firestore Timestamp
+  dueDate: Timestamp;
   frequency: TaskFrequency;
   priority: TaskPriority;
   status: TaskStatus;
-  createdAt: any;
-  lastCompletedAt?: any;
+  createdAt: Timestamp;
+  lastCompletedAt?: Timestamp;
 }
 
 export interface TaskCompletion {
@@ -26,7 +26,7 @@ export interface TaskCompletion {
   houseId: string;
   completedBy: string;
   completedByName: string;
-  completedAt: any;
+  completedAt: Timestamp;
   dateString: string; // YYYY-MM-DD for easy querying
   taskTitle: string;
   note?: string;

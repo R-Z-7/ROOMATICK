@@ -138,11 +138,12 @@ export default function TasksPage() {
     }
   };
 
-  const handleDeleteTask = async (taskId: string) => {
+  const handleDeleteTask = async (task: Task) => {
+    if (!window.confirm(`Delete "${task.title}"? This can't be undone.`)) return;
     try {
-      await deleteDoc(doc(db, "tasks", taskId));
+      await deleteDoc(doc(db, "tasks", task.id));
       toast.success("Task deleted");
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setTasks((prev) => prev.filter((t) => t.id !== task.id));
     } catch {
       toast.error("Failed to delete task");
     }
@@ -321,7 +322,7 @@ export default function TasksPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 text-zinc-400 hover:text-red-500"
-                        onClick={() => handleDeleteTask(task.id)}
+                        onClick={() => handleDeleteTask(task)}
                         title="Delete task"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

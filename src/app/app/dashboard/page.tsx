@@ -9,8 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import {
-  doc, collection, addDoc, updateDoc, arrayUnion,
-  query, where, getDocs,
+  doc, collection, addDoc, setDoc, updateDoc, arrayUnion,
+  query, where, getDocs, limit,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Task, TaskCompletion } from "@/lib/types";
@@ -59,13 +59,24 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeHouse]);
 
+  const generateUniqueInviteCode = async (): Promise<string> => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const snap = await getDocs(
+        query(collection(db, "houses"), where("inviteCode", "==", code), limit(1))
+      );
+      if (snap.empty) return code;
+    }
+    throw new Error("Could not generate a unique invite code. Please try again.");
+  };
+
   const handleCreateHouse = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !userData) return;
 
     setActionLoading(true);
     try {
-      const generatedCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const generatedCode = await generateUniqueInviteCode();
 
       const houseRef = await addDoc(collection(db, "houses"), {
         name: houseName,
@@ -74,7 +85,8 @@ export default function DashboardPage() {
         createdAt: new Date(),
       });
 
-      await addDoc(collection(db, "houseMembers"), {
+      // Deterministic membership doc ID — required by Firestore rules.
+      await setDoc(doc(db, "houseMembers", `${houseRef.id}_${user.uid}`), {
         houseId: houseRef.id,
         userId: user.uid,
         role: "admin",
@@ -125,8 +137,8 @@ export default function DashboardPage() {
         return;
       }
 
-      // Add user to houseMembers
-      await addDoc(collection(db, "houseMembers"), {
+      // Add user to houseMembers using deterministic doc ID for rule checks.
+      await setDoc(doc(db, "houseMembers", `${houseId}_${user.uid}`), {
         houseId,
         userId: user.uid,
         role: "member",

@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useHouse } from "@/contexts/HouseContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/firebase";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, orderBy, limit, getDocs } from "firebase/firestore";
 import { TaskCompletion } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { format } from "date-fns";
@@ -22,13 +22,14 @@ export default function HistoryPage() {
       try {
         const q = query(
           collection(db, "taskCompletions"),
-          where("houseId", "==", activeHouse.id)
+          where("houseId", "==", activeHouse.id),
+          orderBy("completedAt", "desc"),
+          limit(200)
         );
         const snapshot = await getDocs(q);
         const data = snapshot.docs.map(
           (d) => ({ id: d.id, ...d.data() }) as TaskCompletion
         );
-        data.sort((a, b) => b.completedAt.toMillis() - a.completedAt.toMillis());
         setCompletions(data);
       } catch (error) {
         console.error(error);
