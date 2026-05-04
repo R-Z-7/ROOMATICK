@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useHouse } from "@/contexts/HouseContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/firebase";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, orderBy, limit, getDocs } from "firebase/firestore";
 import { TaskCompletion } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
@@ -24,7 +24,9 @@ export default function CalendarPage() {
       try {
         const q = query(
           collection(db, "taskCompletions"),
-          where("houseId", "==", activeHouse.id)
+          where("houseId", "==", activeHouse.id),
+          orderBy("completedAt", "desc"),
+          limit(500)
         );
         const snapshot = await getDocs(q);
         setCompletions(
