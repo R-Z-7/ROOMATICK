@@ -4,22 +4,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { useAuth } from "./AuthContext";
-
-export interface House {
-  id: string;
-  name: string;
-  inviteCode: string;
-  ownerId: string;
-  createdAt: any;
-}
-
-export interface HouseMember {
-  id: string;
-  houseId: string;
-  userId: string;
-  role: "admin" | "member";
-  joinedAt: any;
-}
+import { House, HouseMember } from "@/lib/types";
 
 interface HouseContextType {
   activeHouse: House | null;
@@ -68,18 +53,18 @@ export const HouseProvider = ({ children }: { children: React.ReactNode }) => {
       const houseDoc = await getDoc(doc(db, "houses", targetId));
 
       if (houseDoc.exists()) {
-        const houseData = { id: houseDoc.id, ...houseDoc.data() } as House;
+        const houseData = { houseId: houseDoc.id, ...houseDoc.data() } as House;
         setActiveHouse(houseData);
         setHouses([houseData]);
 
         // Fetch members
         const membersQ = query(
           collection(db, "houseMembers"),
-          where("houseId", "==", houseData.id)
+          where("houseId", "==", houseData.houseId)
         );
         const membersSnapshot = await getDocs(membersQ);
         const membersData = membersSnapshot.docs.map(
-          (d) => ({ id: d.id, ...d.data() }) as HouseMember
+          (d) => ({ memberId: d.id, ...d.data() }) as HouseMember
         );
         setMembers(membersData);
 

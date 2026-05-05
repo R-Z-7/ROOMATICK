@@ -19,7 +19,7 @@ export default function RoommatesPage() {
 
   const handleCopyCode = async () => {
     try {
-      await navigator.clipboard.writeText(activeHouse.inviteCode);
+      await navigator.clipboard.writeText("Generate new link via Admin panel");
       setCopied(true);
       toast.success("Invite code copied!");
       setTimeout(() => setCopied(false), 2000);
@@ -32,7 +32,7 @@ export default function RoommatesPage() {
     <div className="space-y-6 max-w-4xl mx-auto">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Roommates</h1>
-        <p className="text-zinc-500">Manage members of {activeHouse.name}</p>
+        <p className="text-zinc-500">Manage members of {activeHouse.houseName}</p>
       </div>
 
       <div className="grid md:grid-cols-3 gap-6">
@@ -54,7 +54,7 @@ export default function RoommatesPage() {
                 const isCurrentUser = member.userId === user?.uid;
 
                 return (
-                  <div key={member.id} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div key={member.memberId} className="flex items-center justify-between p-3 border rounded-lg">
                     <div className="flex items-center gap-3">
                       <Avatar>
                         <AvatarFallback className="bg-green-100 text-green-700 font-semibold">
@@ -92,7 +92,7 @@ export default function RoommatesPage() {
           </CardHeader>
           <CardContent className="text-center space-y-4">
             <div className="text-3xl font-mono font-bold tracking-widest bg-zinc-100 dark:bg-zinc-800 p-4 rounded-lg select-all">
-              {activeHouse.inviteCode}
+              {"Hidden"}
             </div>
             <Button
               variant="outline"

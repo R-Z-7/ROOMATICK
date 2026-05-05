@@ -34,7 +34,7 @@ export default function DashboardPage() {
       // Fetch Tasks
       const q = query(
         collection(db, "tasks"), 
-        where("houseId", "==", activeHouse.id)
+        where("houseId", "==", activeHouse.houseId)
       );
       const snapshot = await getDocs(q);
       const allFetchedTasks = snapshot.docs.map(d => ({ taskId: d.id, ...d.data() })) as Task[];
@@ -47,7 +47,7 @@ export default function DashboardPage() {
       
       const compQ = query(
         collection(db, "taskCompletions"),
-        where("houseId", "==", activeHouse.id)
+        where("houseId", "==", activeHouse.houseId)
       );
       const compSnap = await getDocs(compQ);
       
@@ -114,7 +114,7 @@ export default function DashboardPage() {
     if (!activeHouse || !user) return;
     setActionLoading(true);
     try {
-      await triggerBinFull(activeHouse.id);
+      await triggerBinFull(activeHouse.houseId);
       toast.success("Bin full event triggered! House notified.");
       fetchData();
     } catch (error) {
@@ -210,19 +210,26 @@ export default function DashboardPage() {
   const userCompletions = completions.filter(c => c.completedBy === user?.uid).length;
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto animate-in fade-in duration-500">
-      <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4">
-        <div>
-          <h1 className="text-4xl font-extrabold tracking-tight">Dashboard</h1>
-          <p className="text-zinc-500 mt-1 text-lg">Welcome home, {userData?.displayName.split(' ')[0]}</p>
+    <div className="space-y-10 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700 ease-out">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-900 dark:to-zinc-950 p-8 rounded-3xl border border-zinc-200/60 dark:border-zinc-800 shadow-sm relative overflow-hidden">
+        {/* Decorative background element */}
+        <div className="absolute -top-24 -right-24 w-64 h-64 bg-primary/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="relative z-10">
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight text-zinc-900 dark:text-zinc-100">
+            Welcome home, <span className="text-primary">{user?.displayName?.split(" ")[0]}!</span> 👋
+          </h1>
+          <p className="text-zinc-500 mt-2 text-lg font-medium">Here's what's happening in {activeHouse?.houseName} today.</p>
         </div>
+        
         <Button 
-          size="lg"
-          className="bg-red-500 hover:bg-red-600 text-white gap-2 font-bold shadow-xl hover:shadow-red-500/20 transition-all"
+          size="lg" 
           onClick={handleBinFull}
           disabled={actionLoading}
+          className="shrink-0 gap-2.5 font-bold shadow-lg shadow-red-500/20 bg-red-500 hover:bg-red-600 text-white rounded-full px-6 py-6 transition-all hover:scale-105 active:scale-95 z-10"
         >
-          <Trash2 className="h-5 w-5" /> Bin Full!
+          <Trash2 className="w-6 h-6" />
+          {actionLoading ? "Triggering..." : "Bin is Full!"}
         </Button>
       </div>
 
@@ -280,10 +287,14 @@ export default function DashboardPage() {
               </div>
             ) : (
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                {[...overdueTasks, ...dueTodayTasks].slice(0, 5).map(task => {
+                {[...overdueTasks, ...dueTodayTasks].slice(0, 5).map((task, idx) => {
                   const overdue = isPast(task.dueDate.toDate()) && !isToday(task.dueDate.toDate());
                   return (
-                    <div key={task.taskId} className="flex items-center justify-between p-4 hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors">
+                    <div 
+                      key={task.taskId} 
+                      className="flex items-center justify-between p-4 hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-all duration-300 hover:translate-x-1"
+                      style={{ animationDelay: `${idx * 50}ms` }}
+                    >
                       <div className="flex items-center gap-4">
                         {task.taskSource === "event" ? (
                           <div className="w-3 h-3 rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)] animate-pulse" />

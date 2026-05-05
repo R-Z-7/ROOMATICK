@@ -89,11 +89,11 @@ export default function SettingsPage() {
           <CardContent className="space-y-3">
             <div>
               <p className="text-sm font-medium text-zinc-500">House Name</p>
-              <p className="font-medium">{activeHouse.name}</p>
+              <p className="font-medium">{activeHouse.houseName}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-zinc-500">Invite Code</p>
-              <p className="font-mono font-bold tracking-widest">{activeHouse.inviteCode}</p>
+              <p className="font-mono font-bold tracking-widest">{"Hidden"}</p>
             </div>
           </CardContent>
         </Card>

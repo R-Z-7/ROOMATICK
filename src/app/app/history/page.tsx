@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useHouse } from "@/contexts/HouseContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/firebase";
 import { collection, query, where, getDocs, Timestamp } from "firebase/firestore";
 import { TaskCompletion } from "@/lib/types";
@@ -10,30 +11,56 @@ import { CheckCircle2, History as HistoryIcon, User } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 export default function HistoryPage() {
-  const { activeHouse, members } = useHouse();
+  const { activeHouse, members, loading: houseLoading } = useHouse();
+  const { user, loading: authLoading } = useAuth();
   const [completions, setCompletions] = useState<TaskCompletion[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchHistory = async () => {
-      if (!activeHouse) return;
+      // 4 & 5: Wait until auth and house membership are loaded
+      if (authLoading || houseLoading) return;
+      if (!user || !activeHouse) {
+        setLoading(false);
+        return;
+      }
+      
       try {
+        setError(null);
+        // 2 & 3: Filter by current user's active houseId (no global queries)
         const q = query(
           collection(db, "taskCompletions"),
-          where("houseId", "==", activeHouse.id),
+          where("houseId", "==", activeHouse.houseId),
         );
         const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(d => ({ completionId: d.id, ...d.data() })) as TaskCompletion[];
-        data.sort((a, b) => b.completedAt.toMillis() - a.completedAt.toMillis());
+        
+        // 7: Handle old completions without houseId safely
+        const validDocs = snapshot.docs.filter(d => {
+          const data = d.data();
+          return data.houseId === activeHouse.houseId;
+        });
+
+        const data = validDocs.map(d => ({ completionId: d.id, ...d.data() })) as TaskCompletion[];
+        
+        // Expected query order by completedAt desc
+        data.sort((a, b) => {
+          const timeA = a.completedAt?.toMillis() || 0;
+          const timeB = b.completedAt?.toMillis() || 0;
+          return timeB - timeA;
+        });
+        
         setCompletions(data);
-      } catch (error) {
-        console.error(error);
+      } catch (err: any) {
+        // 8: Proper error handling
+        console.error("Failed to fetch history:", err);
+        setError(err.message || "You do not have permission to read this house's history.");
       } finally {
         setLoading(false);
       }
     };
     fetchHistory();
-  }, [activeHouse]);
+  }, [activeHouse, user, authLoading, houseLoading]);
 
   const getMemberName = (id: string) => {
     const member = members.find(m => m.userId === id);
@@ -66,7 +93,12 @@ export default function HistoryPage() {
         <p className="text-zinc-500 mt-1 text-lg">A complete record of who did what, and when.</p>
       </div>
 
-      {loading ? (
+      {error ? (
+        <div className="py-24 text-center bg-red-50 dark:bg-red-900/10 rounded-2xl border-2 border-dashed border-red-200 dark:border-red-900/50">
+          <h3 className="text-2xl font-bold mb-2 text-red-600 dark:text-red-400">Permission Denied</h3>
+          <p className="text-red-500 max-w-sm mx-auto text-lg">{error}</p>
+        </div>
+      ) : loading ? (
         <div className="py-20 flex flex-col items-center justify-center animate-pulse">
           <HistoryIcon className="h-10 w-10 text-zinc-300 animate-reverse-spin mb-4" />
           <p className="text-zinc-500 font-medium">Fetching history...</p>

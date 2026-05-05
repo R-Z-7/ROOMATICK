@@ -26,7 +26,7 @@ export default function CalendarPage() {
         // Fetch active tasks to show what's due
         const tasksQ = query(
           collection(db, "tasks"),
-          where("houseId", "==", activeHouse.id)
+          where("houseId", "==", activeHouse.houseId)
         );
         const tasksSnap = await getDocs(tasksQ);
         const allFetchedTasks = tasksSnap.docs.map(d => ({ taskId: d.id, ...d.data() })) as Task[];
@@ -35,7 +35,7 @@ export default function CalendarPage() {
         // Fetch completions to show history
         const compQ = query(
           collection(db, "taskCompletions"),
-          where("houseId", "==", activeHouse.id)
+          where("houseId", "==", activeHouse.houseId)
         );
         const compSnap = await getDocs(compQ);
         setCompletions(compSnap.docs.map(d => ({ completionId: d.id, ...d.data() })) as TaskCompletion[]);

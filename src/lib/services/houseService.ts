@@ -13,6 +13,7 @@ export const createHouse = async (houseName: string, userId: string) => {
     houseName,
     createdBy: userId,
     taskEditMode: "creator_and_admin",
+    recurringTaskCreateMode: "everyone",
     allowAllMembersAdmin: false,
     createdAt: Timestamp.now(),
     active: true,

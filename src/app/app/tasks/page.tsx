@@ -43,7 +43,7 @@ export default function TasksPage() {
     try {
       const q = query(
         collection(db, "tasks"), 
-        where("houseId", "==", activeHouse.id)
+        where("houseId", "==", activeHouse.houseId)
       );
       const snapshot = await getDocs(q);
       const allFetchedTasks = snapshot.docs.map(d => ({ taskId: d.id, ...d.data() })) as Task[];
@@ -85,7 +85,7 @@ export default function TasksPage() {
       }
 
       const newTask: Omit<Task, "taskId"> = {
-        houseId: activeHouse.id,
+        houseId: activeHouse.houseId,
         title,
         category,
         assignedTo: finalAssignee,
@@ -125,7 +125,7 @@ export default function TasksPage() {
     setActionLoading(true);
     
     try {
-      await completeTask(task.taskId, activeHouse.id, user.uid);
+      await completeTask(task.taskId, activeHouse.houseId, user.uid);
       
       if (task.taskSource === "template") {
         toast.success(`Task completed! The next occurrence has been scheduled.`);
@@ -159,11 +159,9 @@ export default function TasksPage() {
         </div>
         
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger render={
-            <Button size="lg" className="gap-2 font-bold shadow-lg bg-primary hover:bg-primary/90">
-              <Plus className="h-5 w-5" /> New Task
-            </Button>
-          } />
+          <DialogTrigger className="inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-bold ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-5 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-11 rounded-full px-6 shadow-lg shadow-primary/25 hover:scale-105 active:scale-95">
+            <Plus className="h-5 w-5" /> New Task
+          </DialogTrigger>
           <DialogContent className="sm:max-w-[450px]">
             <DialogHeader>
               <DialogTitle className="text-2xl font-bold">Create Task</DialogTitle>
@@ -271,22 +269,26 @@ export default function TasksPage() {
           <p className="text-zinc-500 font-medium">Loading tasks...</p>
         </div>
       ) : tasks.length === 0 ? (
-        <div className="py-24 text-center bg-zinc-50 dark:bg-zinc-900/50 rounded-2xl border-2 border-dashed border-zinc-200 dark:border-zinc-800">
+        <div className="py-24 text-center bg-zinc-50 dark:bg-zinc-900/50 rounded-3xl border-2 border-dashed border-zinc-200 dark:border-zinc-800 animate-in fade-in slide-in-from-bottom-8 duration-700 ease-out">
           <div className="bg-white dark:bg-zinc-800 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-zinc-100 dark:border-zinc-700">
             <Sparkles className="h-10 w-10 text-amber-500" />
           </div>
-          <h3 className="text-2xl font-bold mb-2">All caught up!</h3>
+          <h3 className="text-2xl font-bold mb-2 text-zinc-900 dark:text-zinc-100">All caught up!</h3>
           <p className="text-zinc-500 max-w-sm mx-auto text-lg">Your house is completely chore-free right now. Time to relax or create a new task!</p>
         </div>
       ) : (
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {tasks.map(task => {
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {tasks.map((task, idx) => {
             const due = task.dueDate.toDate();
             const overdue = isPast(due) && !isToday(due);
             const today = isToday(due);
 
             return (
-              <Card key={task.taskId} className={`flex flex-col border-2 shadow-sm transition-all hover:shadow-md ${overdue ? 'border-red-200 dark:border-red-900/50 bg-red-50/30 dark:bg-red-900/10' : 'border-zinc-200/60 dark:border-zinc-800/60'}`}>
+              <Card 
+                key={task.taskId} 
+                className={`flex flex-col border-2 shadow-sm transition-all duration-300 hover:shadow-xl hover:-translate-y-1 animate-in fade-in slide-in-from-bottom-8 ${overdue ? 'border-red-200 dark:border-red-900/50 bg-red-50/30 dark:bg-red-900/10' : 'border-zinc-200/60 dark:border-zinc-800/60'}`}
+                style={{ animationFillMode: 'both', animationDelay: `${idx * 100}ms` }}
+              >
                 <CardHeader className="pb-3 border-b border-zinc-100 dark:border-zinc-800/50">
                   <div className="flex justify-between items-start mb-3">
                     <Badge variant={task.taskSource === "event" ? "destructive" : "outline"} className="capitalize bg-white dark:bg-zinc-950 font-semibold px-2.5 py-0.5">
@@ -316,12 +318,11 @@ export default function TasksPage() {
                         <span>Scheduled Template Task</span>
                       </div>
                     )}
-
                   </div>
                 </CardContent>
                 <CardFooter className="pt-2 pb-4 px-4">
                   <Button 
-                    className={`w-full h-11 gap-2 font-bold shadow-sm transition-all ${overdue ? "bg-red-600 hover:bg-red-700 text-white shadow-red-500/20" : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20"}`}
+                    className={`w-full h-11 gap-2 font-bold shadow-sm transition-all ${overdue ? "bg-red-600 hover:bg-red-700 text-white shadow-red-500/20" : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20 hover:scale-105 active:scale-95"}`}
                     onClick={() => handleCompleteTask(task)}
                     disabled={actionLoading}
                   >

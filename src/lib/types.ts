@@ -18,6 +18,7 @@ export interface House {
   houseName: string;
   createdBy: string;
   taskEditMode: TaskEditMode;
+  recurringTaskCreateMode: "admin_only" | "everyone";
   allowAllMembersAdmin: boolean;
   createdAt: Timestamp;
   active: boolean;

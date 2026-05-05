@@ -3,30 +3,38 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ---------------------------------------------------------
+    // Core Utility Functions
+    // ---------------------------------------------------------
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    function getMemberId(houseId) {
-      return houseId + '_' + request.auth.uid;
+    function getMemberPath(houseId) {
+      return /databases/$(database)/documents/houseMembers/$(houseId + '_' + request.auth.uid);
     }
 
     function isHouseMember(houseId) {
-      let memberDoc = get(/databases/$(database)/documents/houseMembers/$(getMemberId(houseId)));
-      return memberDoc != null && memberDoc.data.status == 'active';
+      return exists(getMemberPath(houseId)) && get(getMemberPath(houseId)).data.status == 'active';
     }
 
     function isHouseAdmin(houseId) {
-      let houseDoc = get(/databases/$(database)/documents/houses/$(houseId));
-      let memberDoc = get(/databases/$(database)/documents/houseMembers/$(getMemberId(houseId)));
-      let hasAdminRole = memberDoc != null && memberDoc.data.role == 'admin' && memberDoc.data.status == 'active';
-      let allAdmins = houseDoc != null && houseDoc.data.allowAllMembersAdmin == true;
-      return (hasAdminRole || allAdmins) && isHouseMember(houseId);
+      let memberPath = getMemberPath(houseId);
+      let isExplicitAdmin = exists(memberPath) && get(memberPath).data.role == 'admin' && get(memberPath).data.status == 'active';
+      
+      let housePath = /databases/$(database)/documents/houses/$(houseId);
+      let allAdmins = exists(housePath) && get(housePath).data.allowAllMembersAdmin == true;
+      
+      return (isExplicitAdmin || allAdmins) && isHouseMember(houseId);
     }
 
     function canEditTask(houseId, createdBy) {
-      let houseDoc = get(/databases/$(database)/documents/houses/$(houseId));
-      let editMode = houseDoc.data.taskEditMode;
+      let housePath = /databases/$(database)/documents/houses/$(houseId);
+      // Fallback to everyone if not set
+      let editMode = exists(housePath) && 'taskEditMode' in get(housePath).data 
+                     ? get(housePath).data.taskEditMode 
+                     : 'everyone';
+                     
       let isAdmin = isHouseAdmin(houseId);
       let isCreator = request.auth.uid == createdBy;
       
@@ -35,7 +43,23 @@ service cloud.firestore {
              (editMode == 'creator_and_admin' && isCreator && isHouseMember(houseId));
     }
 
+    function canCreateRecurringTask(houseId) {
+      let housePath = /databases/$(database)/documents/houses/$(houseId);
+      // Fallback to everyone if not set
+      let createMode = exists(housePath) && 'recurringTaskCreateMode' in get(housePath).data 
+                       ? get(housePath).data.recurringTaskCreateMode 
+                       : 'everyone';
+                       
+      return isHouseAdmin(houseId) || (createMode == 'everyone' && isHouseMember(houseId));
+    }
+
+    // ---------------------------------------------------------
+    // Rules
+    // ---------------------------------------------------------
+
     // Users Collection
+    // - Read: Any authenticated user (needed to display roommate names via their user profile)
+    // - Write: Only the owner can write to their profile
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow write: if isAuthenticated() && request.auth.uid == userId;
@@ -51,24 +75,36 @@ service cloud.firestore {
 
     // House Members Collection
     match /houseMembers/{memberId} {
+      // You can read the member list if you are a member of that house
       allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
-      allow create: if isAuthenticated(); // Allowed during joining phase via token validation in API/Transaction
+      
+      // Creating a member is loosely allowed for the client-side Invite flow.
+      // In a strict production setting, this should be blocked and handled by a Cloud Function.
+      allow create: if isAuthenticated(); 
+      
+      // Admins can update roles, or a user can update their own member doc (e.g., leave the house)
       allow update: if isAuthenticated() && (isHouseAdmin(resource.data.houseId) || request.auth.uid == resource.data.userId);
-      // Only admins can remove roommates
+      
+      // Only admins can forcefully remove a roommate
       allow delete: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
     }
 
     // Invites Collection
     match /invites/{inviteId} {
+      // Read is open to authenticated users so the /join/[inviteToken] route can validate the token before joining
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isHouseAdmin(request.resource.data.houseId);
+      
+      // Anyone can mark the invite as used during the join transaction
       allow update: if isAuthenticated() && request.resource.data.used == true;
+      allow delete: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
     }
 
-    // Task Templates Collection
+    // Task Templates Collection (Recurring Tasks)
     match /taskTemplates/{templateId} {
       allow read: if isAuthenticated() && (resource.data.houseId == 'system' || isHouseMember(resource.data.houseId));
-      allow write: if isAuthenticated() && isHouseAdmin(request.resource.data.houseId);
+      allow create: if isAuthenticated() && canCreateRecurringTask(request.resource.data.houseId);
+      allow update, delete: if isAuthenticated() && canCreateRecurringTask(resource.data.houseId);
     }
 
     // Tasks Collection
@@ -86,11 +122,12 @@ service cloud.firestore {
       allow update, delete: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
     }
 
-    // House Events Collection
+    // House Events Collection (e.g. Bin Full)
     match /houseEvents/{eventId} {
       allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
       allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
       allow update: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      allow delete: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
     }
 
     // Notifications Collection
@@ -102,7 +139,7 @@ service cloud.firestore {
     // Email Logs Collection
     match /emailLogs/{emailLogId} {
       allow read: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
-      allow write: if false; // Only written by Cloud Functions
+      allow write: if false; // Only written securely by Cloud Functions
     }
   }
 }
