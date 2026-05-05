@@ -7,85 +7,102 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Authoritative membership check: a doc must exist at
-    // /houseMembers/{houseId}_{uid}. This is server-enforced and cannot be
-    // forged by a client editing their own user doc.
+    function getMemberId(houseId) {
+      return houseId + '_' + request.auth.uid;
+    }
+
     function isHouseMember(houseId) {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/houseMembers/$(houseId + "_" + request.auth.uid));
+      let memberDoc = get(/databases/$(database)/documents/houseMembers/$(getMemberId(houseId)));
+      return memberDoc != null && memberDoc.data.status == 'active';
     }
 
-    // Users may read/write only their own profile, and may NOT mutate
-    // houseIds directly (the array is a UI hint mirrored from houseMembers).
-    // Membership changes must go through the houseMembers collection.
+    function isHouseAdmin(houseId) {
+      let houseDoc = get(/databases/$(database)/documents/houses/$(houseId));
+      let memberDoc = get(/databases/$(database)/documents/houseMembers/$(getMemberId(houseId)));
+      let hasAdminRole = memberDoc != null && memberDoc.data.role == 'admin' && memberDoc.data.status == 'active';
+      let allAdmins = houseDoc != null && houseDoc.data.allowAllMembersAdmin == true;
+      return (hasAdminRole || allAdmins) && isHouseMember(houseId);
+    }
+
+    function canEditTask(houseId, createdBy) {
+      let houseDoc = get(/databases/$(database)/documents/houses/$(houseId));
+      let editMode = houseDoc.data.taskEditMode;
+      let isAdmin = isHouseAdmin(houseId);
+      let isCreator = request.auth.uid == createdBy;
+      
+      return isAdmin || 
+             (editMode == 'everyone' && isHouseMember(houseId)) || 
+             (editMode == 'creator_and_admin' && isCreator && isHouseMember(houseId));
+    }
+
+    // Users Collection
     match /users/{userId} {
-      allow read: if isAuthenticated() && request.auth.uid == userId;
-
-      // Initial create: must be the owner; houseIds must be empty.
-      allow create: if isAuthenticated()
-        && request.auth.uid == userId
-        && request.resource.data.houseIds.size() == 0;
-
-      // Updates: owner only. houseIds may only grow by exactly one entry,
-      // and that entry must correspond to a houseMembers doc that already
-      // exists for this user (proving membership was granted server-side).
-      allow update: if isAuthenticated()
-        && request.auth.uid == userId
-        && (
-          // Non-membership update (displayName, etc.) — houseIds unchanged.
-          request.resource.data.houseIds == resource.data.houseIds
-          || (
-            // Adding exactly one new houseId backed by a real membership doc.
-            request.resource.data.houseIds.size() == resource.data.houseIds.size() + 1
-            && request.resource.data.houseIds.hasAll(resource.data.houseIds)
-            && exists(
-              /databases/$(database)/documents/houseMembers/$(
-                request.resource.data.houseIds.removeAll(resource.data.houseIds)[0]
-                + "_" + request.auth.uid
-              )
-            )
-          )
-        );
-
-      allow delete: if false;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Houses Collection
     match /houses/{houseId} {
       allow create: if isAuthenticated();
-      allow read, update: if isHouseMember(houseId);
-      allow delete: if false;
+      allow read: if isAuthenticated() && isHouseMember(houseId);
+      allow update: if isAuthenticated() && isHouseAdmin(houseId);
+      allow delete: if false; 
     }
 
-    // House membership docs use deterministic IDs: {houseId}_{userId}.
+    // House Members Collection
     match /houseMembers/{memberId} {
-      // A user may only create their own membership doc, with the
-      // matching composite ID, and only if either:
-      //   (a) they own the house (creating it), or
-      //   (b) the invite code they supplied matches the target house.
-      // Invite-code verification is enforced client-side; rules ensure the
-      // doc ID matches the userId so a user cannot grant membership to
-      // someone else.
-      allow create: if isAuthenticated()
-        && request.resource.data.userId == request.auth.uid
-        && memberId == request.resource.data.houseId + "_" + request.auth.uid;
-
-      allow read: if isHouseMember(resource.data.houseId);
-      allow update: if false;
-      allow delete: if isAuthenticated() && request.auth.uid == resource.data.userId;
+      allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      allow create: if isAuthenticated(); // Allowed during joining phase via token validation in API/Transaction
+      allow update: if isAuthenticated() && (isHouseAdmin(resource.data.houseId) || request.auth.uid == resource.data.userId);
+      // Only admins can remove roommates
+      allow delete: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
     }
 
+    // Invites Collection
+    match /invites/{inviteId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isHouseAdmin(request.resource.data.houseId);
+      allow update: if isAuthenticated() && request.resource.data.used == true;
+    }
+
+    // Task Templates Collection
+    match /taskTemplates/{templateId} {
+      allow read: if isAuthenticated() && (resource.data.houseId == 'system' || isHouseMember(resource.data.houseId));
+      allow write: if isAuthenticated() && isHouseAdmin(request.resource.data.houseId);
+    }
+
+    // Tasks Collection
     match /tasks/{taskId} {
-      allow create: if isHouseMember(request.resource.data.houseId);
-      allow read, update, delete: if isHouseMember(resource.data.houseId);
+      allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
+      allow update: if isAuthenticated() && canEditTask(resource.data.houseId, resource.data.createdBy);
+      allow delete: if isAuthenticated() && canEditTask(resource.data.houseId, resource.data.createdBy);
     }
 
+    // Task Completions Collection
     match /taskCompletions/{completionId} {
-      allow create: if isHouseMember(request.resource.data.houseId)
-        && request.resource.data.completedBy == request.auth.uid;
-      allow read: if isHouseMember(resource.data.houseId);
-      allow update: if false;
-      allow delete: if isHouseMember(resource.data.houseId)
-        && resource.data.completedBy == request.auth.uid;
+      allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
+      allow update, delete: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
+    }
+
+    // House Events Collection
+    match /houseEvents/{eventId} {
+      allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
+      allow update: if isAuthenticated() && isHouseMember(resource.data.houseId);
+    }
+
+    // Notifications Collection
+    match /notifications/{notificationId} {
+      allow read, update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
+    }
+    
+    // Email Logs Collection
+    match /emailLogs/{emailLogId} {
+      allow read: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
+      allow write: if false; // Only written by Cloud Functions
     }
   }
 }

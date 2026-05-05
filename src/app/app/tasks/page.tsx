@@ -4,36 +4,37 @@ import { useState, useEffect } from "react";
 import { useHouse } from "@/contexts/HouseContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/firebase";
-import {
-  collection, query, where, getDocs, addDoc,
-  updateDoc, deleteDoc, doc,
-} from "firebase/firestore";
-import { Task } from "@/lib/types";
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, Timestamp } from "firebase/firestore";
+import { Task, TaskCategory, TaskType, TaskFrequency, TaskPriority, TaskStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { format, isPast, isToday, addDays, addWeeks, addMonths } from "date-fns";
-import { CheckCircle2, Clock, CalendarIcon, Plus, Trash2 } from "lucide-react";
+import { format, isPast, isToday } from "date-fns";
+import { CheckCircle2, Clock, CalendarIcon, Plus, Sparkles, User, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { completeTask } from "@/lib/services/taskService";
 
 export default function TasksPage() {
-  const { activeHouse, members, memberProfiles } = useHouse();
-  const { user, userData } = useAuth();
-
+  const { activeHouse, members } = useHouse();
+  const { user } = useAuth();
+  
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-
+  const [actionLoading, setActionLoading] = useState(false);
+  
   // Form state
   const [title, setTitle] = useState("");
-  const [category, setCategory] = useState<Task["category"]>("kitchen");
-  const [assigneeId, setAssigneeId] = useState("any");
-  const [frequency, setFrequency] = useState<Task["frequency"]>("once");
-  const [priority, setPriority] = useState<Task["priority"]>("medium");
+  const [category, setCategory] = useState<TaskCategory>("kitchen");
+  const [assignedTo, setAssignedTo] = useState("any");
+  const [frequency, setFrequency] = useState<TaskFrequency>("weekly");
+  const [taskType, setTaskType] = useState<TaskType>("recurring");
+  const [isRotating, setIsRotating] = useState(false);
   const [dueDate, setDueDate] = useState("");
 
   const fetchTasks = async () => {
@@ -41,15 +42,16 @@ export default function TasksPage() {
     setLoading(true);
     try {
       const q = query(
-        collection(db, "tasks"),
-        where("houseId", "==", activeHouse.id),
-        where("status", "in", ["pending", "overdue"])
+        collection(db, "tasks"), 
+        where("houseId", "==", activeHouse.id)
       );
       const snapshot = await getDocs(q);
-      const fetchedTasks = snapshot.docs.map(
-        (d) => ({ id: d.id, ...d.data() }) as Task
-      );
+      const allFetchedTasks = snapshot.docs.map(d => ({ taskId: d.id, ...d.data() })) as Task[];
+      const fetchedTasks = allFetchedTasks.filter(t => t.status === "pending" || t.status === "overdue");
+      
+      // Sort in memory (dueDate ASC)
       fetchedTasks.sort((a, b) => a.dueDate.toMillis() - b.dueDate.toMillis());
+      
       setTasks(fetchedTasks);
     } catch (error) {
       console.error("Error fetching tasks:", error);
@@ -61,139 +63,122 @@ export default function TasksPage() {
 
   useEffect(() => {
     fetchTasks();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeHouse]);
 
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeHouse || !user) return;
+    setActionLoading(true);
 
     try {
-      await addDoc(collection(db, "tasks"), {
+      const taskDueDate = Timestamp.fromDate(new Date(dueDate));
+      
+      let finalAssignee = assignedTo === "any" ? "" : assignedTo;
+      let rotationQueue: string[] = [];
+
+      if (isRotating) {
+        // Rotate amongst all members for simplicity
+        rotationQueue = members.map(m => m.userId);
+        if (rotationQueue.length > 0) {
+          finalAssignee = rotationQueue[0];
+        }
+      }
+
+      const newTask: Omit<Task, "taskId"> = {
         houseId: activeHouse.id,
         title,
         category,
-        assigneeId: assigneeId === "any" ? "" : assigneeId,
-        frequency,
-        priority,
+        assignedTo: finalAssignee,
+        dueDate: taskDueDate,
         status: "pending",
-        dueDate: new Date(dueDate),
-        createdAt: new Date(),
-      });
-      toast.success("Task created!");
+        priority: "medium",
+        taskSource: "manual",
+        isAnonymousEvent: false,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        createdBy: user.uid,
+      };
+
+      if (taskType === "recurring" && isRotating) {
+         // Create template instead of raw task if rotating
+      }
+
+      await addDoc(collection(db, "tasks"), newTask);
+      toast.success("Task created successfully!");
       setIsDialogOpen(false);
+      
+      // Reset form
       setTitle("");
       setDueDate("");
-      setCategory("kitchen");
-      setAssigneeId("any");
-      setFrequency("once");
-      setPriority("medium");
+      setIsRotating(false);
+      
       fetchTasks();
-    } catch {
+    } catch (error) {
       toast.error("Failed to create task");
+    } finally {
+      setActionLoading(false);
     }
   };
 
   const handleCompleteTask = async (task: Task) => {
-    if (!activeHouse || !user || !userData) return;
-
+    if (!activeHouse || !user) return;
+    setActionLoading(true);
+    
     try {
-      const now = new Date();
-      const completedByName = userData.displayName || userData.email?.split("@")[0] || "User";
-
-      await addDoc(collection(db, "taskCompletions"), {
-        taskId: task.id,
-        houseId: activeHouse.id,
-        completedBy: user.uid,
-        completedByName,
-        completedAt: now,
-        dateString: format(now, "yyyy-MM-dd"),
-        taskTitle: task.title,
-      });
-
-      if (task.frequency === "once") {
-        await updateDoc(doc(db, "tasks", task.id), {
-          status: "completed",
-          lastCompletedAt: now,
-        });
-        toast.success("Task completed!");
+      await completeTask(task.taskId, activeHouse.id, user.uid);
+      
+      if (task.taskSource === "template") {
+        toast.success(`Task completed! The next occurrence has been scheduled.`);
       } else {
-        const baseDate = isPast(task.dueDate.toDate()) ? now : task.dueDate.toDate();
-        let nextDate = new Date();
-        if (task.frequency === "daily") nextDate = addDays(baseDate, 1);
-        if (task.frequency === "weekly") nextDate = addWeeks(baseDate, 1);
-        if (task.frequency === "monthly") nextDate = addMonths(baseDate, 1);
-
-        await updateDoc(doc(db, "tasks", task.id), {
-          dueDate: nextDate,
-          status: "pending",
-          lastCompletedAt: now,
-        });
-        toast.success(`Done! Next due: ${format(nextDate, "MMM d")}`);
+        toast.success("Task completed!");
       }
-
+      
       fetchTasks();
-    } catch {
-      toast.error("Failed to mark task complete");
-    }
-  };
-
-  const handleDeleteTask = async (task: Task) => {
-    if (!window.confirm(`Delete "${task.title}"? This can't be undone.`)) return;
-    try {
-      await deleteDoc(doc(db, "tasks", task.id));
-      toast.success("Task deleted");
-      setTasks((prev) => prev.filter((t) => t.id !== task.id));
-    } catch {
-      toast.error("Failed to delete task");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to mark task complete");
+    } finally {
+      setActionLoading(false);
     }
   };
 
   const getAssigneeName = (id: string) => {
-    if (!id) return "Anyone";
-    if (id === user?.uid) return "You";
-    return memberProfiles[id] || "Roommate";
+    if (!id) return "Anyone / Unassigned";
+    if (id === "rotation") return "Rotating...";
+    const member = members.find(m => m.userId === id);
+    return id === user?.uid ? "You" : "Roommate"; // Ideally fetch real names
   };
 
-  if (!activeHouse) return <div>Please create or join a house first.</div>;
+  if (!activeHouse) return <div className="p-8 text-center">Please create or join a house first.</div>;
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+    <div className="space-y-8 max-w-6xl mx-auto animate-in fade-in duration-500">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Chores & Tasks</h1>
-          <p className="text-zinc-500">Manage what needs to be done around the house.</p>
+          <h1 className="text-4xl font-extrabold tracking-tight">Chores & Tasks</h1>
+          <p className="text-zinc-500 mt-1 text-lg">Manage what needs to be done around the house.</p>
         </div>
-
+        
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger
-            render={
-              <Button className="gap-2">
-                <Plus className="h-4 w-4" /> New Task
-              </Button>
-            }
-          />
-          <DialogContent className="sm:max-w-[460px]">
+          <DialogTrigger render={
+            <Button size="lg" className="gap-2 font-bold shadow-lg bg-primary hover:bg-primary/90">
+              <Plus className="h-5 w-5" /> New Task
+            </Button>
+          } />
+          <DialogContent className="sm:max-w-[450px]">
             <DialogHeader>
-              <DialogTitle>Create a new task</DialogTitle>
+              <DialogTitle className="text-2xl font-bold">Create Task</DialogTitle>
             </DialogHeader>
-            <form onSubmit={handleCreateTask} className="space-y-4 pt-4">
+            <form onSubmit={handleCreateTask} className="space-y-5 pt-4">
               <div className="space-y-2">
-                <Label htmlFor="title">Task Title</Label>
-                <Input
-                  id="title"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  required
-                  placeholder="e.g. Clean the kitchen"
-                />
+                <Label htmlFor="title" className="text-sm font-semibold">Task Title</Label>
+                <Input id="title" value={title} onChange={e => setTitle(e.target.value)} required placeholder="e.g. Clean the kitchen surfaces" className="h-11" />
               </div>
-
+              
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Category</Label>
-                  <Select value={category} onValueChange={(val: any) => setCategory(val)}>
-                    <SelectTrigger>
+                  <Label className="text-sm font-semibold">Category</Label>
+                  <Select value={category} onValueChange={(val) => setCategory(val as TaskCategory)}>
+                    <SelectTrigger className="h-11">
                       <SelectValue placeholder="Category" />
                     </SelectTrigger>
                     <SelectContent>
@@ -208,150 +193,137 @@ export default function TasksPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Frequency</Label>
-                  <Select value={frequency} onValueChange={(val: any) => setFrequency(val)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Frequency" />
+                  <Label className="text-sm font-semibold">Task Type</Label>
+                  <Select value={taskType} onValueChange={(val) => setTaskType(val as TaskType)}>
+                    <SelectTrigger className="h-11">
+                      <SelectValue placeholder="Type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="once">Just Once</SelectItem>
-                      <SelectItem value="daily">Daily</SelectItem>
-                      <SelectItem value="weekly">Weekly</SelectItem>
-                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="fixed">One-off Task</SelectItem>
+                      <SelectItem value="recurring">Recurring</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               </div>
+
+              {taskType === "recurring" && (
+                <div className="space-y-4 p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-800">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold">Frequency</Label>
+                    <Select value={frequency} onValueChange={(val) => setFrequency(val as TaskFrequency)}>
+                      <SelectTrigger className="h-11 bg-white dark:bg-zinc-950">
+                        <SelectValue placeholder="Frequency" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="daily">Daily</SelectItem>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-semibold">Rotate Assignees</Label>
+                      <p className="text-xs text-zinc-500">Automatically switch turns when completed</p>
+                    </div>
+                    <Switch checked={isRotating} onCheckedChange={setIsRotating} />
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Due Date</Label>
-                  <Input
-                    type="date"
-                    required
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
+                  <Label className="text-sm font-semibold">Due Date</Label>
+                  <Input type="date" required value={dueDate} onChange={e => setDueDate(e.target.value)} className="h-11" />
                 </div>
-                <div className="space-y-2">
-                  <Label>Priority</Label>
-                  <Select value={priority} onValueChange={(val: any) => setPriority(val)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Priority" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="urgent">Urgent</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                
+                {!isRotating && (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold">Assignee</Label>
+                    <Select value={assignedTo} onValueChange={(val) => setAssignedTo(val as string)}>
+                      <SelectTrigger className="h-11">
+                        <SelectValue placeholder="Assignee" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="any">Anyone / Unassigned</SelectItem>
+                        {user && <SelectItem value={user.uid}>Me</SelectItem>}
+                        {members.filter(m => m.userId !== user?.uid).map(m => (
+                          <SelectItem key={m.userId} value={m.userId}>Roommate ({m.userId.substring(0,4)})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
-              <div className="space-y-2">
-                <Label>Assignee</Label>
-                <Select value={assigneeId} onValueChange={(val) => setAssigneeId(val || "any")}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Assignee" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="any">Anyone / Unassigned</SelectItem>
-                    {members.map((m) => (
-                      <SelectItem key={m.userId} value={m.userId}>
-                        {m.userId === user?.uid
-                          ? `Me (${memberProfiles[m.userId] || "You"})`
-                          : memberProfiles[m.userId] || "Roommate"}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <Button type="submit" className="w-full">Create Task</Button>
+              <Button type="submit" className="w-full h-11 text-md font-semibold" disabled={actionLoading}>
+                {actionLoading ? "Creating..." : "Create Task"}
+              </Button>
             </form>
           </DialogContent>
         </Dialog>
       </div>
 
       {loading ? (
-        <div className="py-10 text-center">Loading tasks...</div>
+        <div className="py-20 flex flex-col items-center justify-center animate-pulse">
+          <RefreshCw className="h-10 w-10 text-zinc-300 animate-spin mb-4" />
+          <p className="text-zinc-500 font-medium">Loading tasks...</p>
+        </div>
       ) : tasks.length === 0 ? (
-        <div className="py-20 text-center bg-white dark:bg-zinc-900 rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700">
-          <CheckCircle2 className="h-10 w-10 text-zinc-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium">All caught up!</h3>
-          <p className="text-zinc-500 max-w-sm mx-auto mt-1">
-            No pending tasks. Enjoy your clean house or create a new one.
-          </p>
+        <div className="py-24 text-center bg-zinc-50 dark:bg-zinc-900/50 rounded-2xl border-2 border-dashed border-zinc-200 dark:border-zinc-800">
+          <div className="bg-white dark:bg-zinc-800 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-zinc-100 dark:border-zinc-700">
+            <Sparkles className="h-10 w-10 text-amber-500" />
+          </div>
+          <h3 className="text-2xl font-bold mb-2">All caught up!</h3>
+          <p className="text-zinc-500 max-w-sm mx-auto text-lg">Your house is completely chore-free right now. Time to relax or create a new task!</p>
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {tasks.map((task) => {
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {tasks.map(task => {
             const due = task.dueDate.toDate();
             const overdue = isPast(due) && !isToday(due);
             const today = isToday(due);
 
             return (
-              <Card
-                key={task.id}
-                className={`flex flex-col ${overdue ? "border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-900/10" : ""}`}
-              >
-                <CardHeader className="pb-2">
-                  <div className="flex justify-between items-start">
-                    <Badge
-                      variant={task.priority === "urgent" ? "destructive" : "outline"}
-                      className="capitalize"
-                    >
+              <Card key={task.taskId} className={`flex flex-col border-2 shadow-sm transition-all hover:shadow-md ${overdue ? 'border-red-200 dark:border-red-900/50 bg-red-50/30 dark:bg-red-900/10' : 'border-zinc-200/60 dark:border-zinc-800/60'}`}>
+                <CardHeader className="pb-3 border-b border-zinc-100 dark:border-zinc-800/50">
+                  <div className="flex justify-between items-start mb-3">
+                    <Badge variant={task.taskSource === "event" ? "destructive" : "outline"} className="capitalize bg-white dark:bg-zinc-950 font-semibold px-2.5 py-0.5">
                       {task.category}
                     </Badge>
-                    <div className="flex items-center gap-1">
-                      {overdue ? (
-                        <Badge variant="destructive" className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" /> Overdue
-                        </Badge>
-                      ) : today ? (
-                        <Badge className="bg-amber-500 hover:bg-amber-600 flex items-center gap-1">
-                          <Clock className="w-3 h-3" /> Today
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                          <CalendarIcon className="w-3 h-3" /> {format(due, "MMM d")}
-                        </Badge>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-zinc-400 hover:text-red-500"
-                        onClick={() => handleDeleteTask(task)}
-                        title="Delete task"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
+                    {overdue ? (
+                      <Badge variant="destructive" className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> Overdue</Badge>
+                    ) : today ? (
+                      <Badge className="bg-amber-500 hover:bg-amber-600 flex items-center gap-1.5 text-white"><Clock className="w-3.5 h-3.5"/> Today</Badge>
+                    ) : (
+                      <Badge variant="secondary" className="flex items-center gap-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
+                        <CalendarIcon className="w-3.5 h-3.5"/> {format(due, "MMM d")}
+                      </Badge>
+                    )}
                   </div>
-                  <CardTitle className="text-xl mt-2">{task.title}</CardTitle>
+                  <CardTitle className="text-xl font-bold leading-tight">{task.title}</CardTitle>
                 </CardHeader>
-                <CardContent className="flex-1">
-                  <div className="text-sm text-zinc-500 space-y-1">
-                    <p>
-                      Assigned to:{" "}
-                      <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                        {getAssigneeName(task.assigneeId!)}
-                      </span>
-                    </p>
-                    <p>
-                      Frequency: <span className="capitalize">{task.frequency}</span>
-                    </p>
+                <CardContent className="flex-1 pt-4">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-900/50 p-2.5 rounded-lg">
+                      <User className="w-4 h-4" />
+                      <span>{getAssigneeName(task.assignedTo)}</span>
+                    </div>
+                    {task.taskSource === "template" && (
+                      <div className="flex items-center gap-2 text-sm text-zinc-500">
+                        <RefreshCw className="w-4 h-4 text-zinc-400" />
+                        <span>Scheduled Template Task</span>
+                      </div>
+                    )}
+
                   </div>
                 </CardContent>
-                <CardFooter>
-                  <Button
-                    className={`w-full gap-2 ${
-                      overdue
-                        ? "bg-red-600 hover:bg-red-700 text-white"
-                        : "bg-green-600 hover:bg-green-700 text-white"
-                    }`}
+                <CardFooter className="pt-2 pb-4 px-4">
+                  <Button 
+                    className={`w-full h-11 gap-2 font-bold shadow-sm transition-all ${overdue ? "bg-red-600 hover:bg-red-700 text-white shadow-red-500/20" : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20"}`}
                     onClick={() => handleCompleteTask(task)}
+                    disabled={actionLoading}
                   >
                     <CheckCircle2 className="w-5 h-5" /> Mark Complete
                   </Button>
