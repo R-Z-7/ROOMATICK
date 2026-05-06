@@ -117,7 +117,7 @@ service cloud.firestore {
 
     // Task Completions Collection
     match /taskCompletions/{completionId} {
-      allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isHouseMember(request.resource.data.houseId);
       allow update, delete: if isAuthenticated() && isHouseAdmin(resource.data.houseId);
     }
