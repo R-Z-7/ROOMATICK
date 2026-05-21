@@ -31,6 +31,9 @@ export const completeTask = async (
   completedOnBehalf: boolean = false,
   note?: string
 ) => {
+  if (!houseId) {
+    throw new Error("Cannot complete task: No active house is loaded.");
+  }
   const taskRef = doc(db, "tasks", taskId);
   
   await runTransaction(db, async (transaction) => {
@@ -107,6 +110,9 @@ export const completeTask = async (
 };
 
 export const triggerBinFull = async (houseId: string) => {
+  if (!houseId) {
+    throw new Error("Cannot trigger bin full event: No active house is loaded.");
+  }
   // 1. Create the anonymous event
   const eventRef = doc(collection(db, "houseEvents"));
   const eventId = eventRef.id;

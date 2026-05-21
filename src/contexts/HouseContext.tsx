@@ -29,7 +29,7 @@ const HouseContext = createContext<HouseContextType>({
 export const useHouse = () => useContext(HouseContext);
 
 export const HouseProvider = ({ children }: { children: React.ReactNode }) => {
-  const { userData } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [activeHouse, setActiveHouse] = useState<House | null>(null);
   const [houses, setHouses] = useState<House[]>([]);
   const [members, setMembers] = useState<HouseMember[]>([]);
@@ -38,7 +38,10 @@ export const HouseProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   const fetchHouseData = async (houseId?: string) => {
-    if (!userData || userData.houseIds.length === 0) {
+    if (authLoading) {
+      return;
+    }
+    if (!user) {
       setHouses([]);
       setActiveHouse(null);
       setMembers([]);
@@ -48,19 +51,68 @@ export const HouseProvider = ({ children }: { children: React.ReactNode }) => {
     }
 
     setLoading(true);
+    console.log(`[HouseContext] Fetching house data for Auth UID: ${user.uid}`);
+
     try {
-      const targetId = houseId || selectedHouseId || userData.houseIds[0];
-      const houseDoc = await getDoc(doc(db, "houses", targetId));
+      // Query houseMembers where userId == currentUser.uid and status == "active"
+      const memberQuery = query(
+        collection(db, "houseMembers"),
+        where("userId", "==", user.uid),
+        where("status", "==", "active")
+      );
+      
+      const memberSnapshot = await getDocs(memberQuery);
+      
+      if (memberSnapshot.empty) {
+        console.log("[HouseContext] No active house membership found for user. Showing Create or Join state.");
+        setHouses([]);
+        setActiveHouse(null);
+        setMembers([]);
+        setMemberProfiles({});
+        setLoading(false);
+        return;
+      }
 
-      if (houseDoc.exists()) {
-        const houseData = { houseId: houseDoc.id, ...houseDoc.data() } as House;
-        setActiveHouse(houseData);
-        setHouses([houseData]);
+      const userMemberships = memberSnapshot.docs.map(
+        (d) => ({ memberId: d.id, ...d.data() }) as HouseMember
+      );
+      
+      userMemberships.forEach((m) => {
+        console.log(`[HouseContext] Found houseMember: memberId=${m.memberId}, houseId=${m.houseId}, role=${m.role}, status=${m.status}`);
+      });
 
-        // Fetch members
+      // Fetch all houses this user belongs to
+      const fetchedHouses: House[] = [];
+      await Promise.all(
+        userMemberships.map(async (m) => {
+          try {
+            const houseDoc = await getDoc(doc(db, "houses", m.houseId));
+            if (houseDoc.exists()) {
+              fetchedHouses.push({ houseId: houseDoc.id, ...houseDoc.data() } as House);
+            }
+          } catch (err) {
+            console.error(`[HouseContext] Error fetching house ${m.houseId}:`, err);
+          }
+        })
+      );
+
+      setHouses(fetchedHouses);
+
+      if (fetchedHouses.length > 0) {
+        const targetId = houseId || selectedHouseId || fetchedHouses[0].houseId;
+        console.log(`[HouseContext] Target active houseId: ${targetId}`);
+
+        let activeHouseData = fetchedHouses.find((h) => h.houseId === targetId);
+        if (!activeHouseData) {
+          activeHouseData = fetchedHouses[0];
+        }
+        
+        setActiveHouse(activeHouseData);
+
+        // Fetch members for this specific active house
         const membersQ = query(
           collection(db, "houseMembers"),
-          where("houseId", "==", houseData.houseId)
+          where("houseId", "==", activeHouseData.houseId)
         );
         const membersSnapshot = await getDocs(membersQ);
         const membersData = membersSnapshot.docs.map(
@@ -85,27 +137,38 @@ export const HouseProvider = ({ children }: { children: React.ReactNode }) => {
           })
         );
         setMemberProfiles(profiles);
+      } else {
+        console.log("[HouseContext] No house document found matching active memberships.");
+        setActiveHouse(null);
+        setMembers([]);
+        setMemberProfiles({});
       }
     } catch (error) {
-      console.error("Error fetching house data:", error);
+      console.error("[HouseContext] Error fetching house data:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Re-fetch whenever userData changes (covers joining a house, which updates houseIds via onSnapshot)
+  // Re-fetch whenever auth loading completes or user changes
   useEffect(() => {
-    if (userData && userData.houseIds.length > 0) {
-      fetchHouseData();
-    } else if (userData) {
-      setLoading(false);
-      setActiveHouse(null);
+    if (authLoading) {
+      setLoading(true);
+      return;
+    }
+
+    if (!user) {
       setHouses([]);
+      setActiveHouse(null);
       setMembers([]);
       setMemberProfiles({});
+      setLoading(false);
+      return;
     }
+
+    fetchHouseData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userData]);
+  }, [user, authLoading]);
 
   const setActiveHouseId = (id: string) => {
     setSelectedHouseId(id);

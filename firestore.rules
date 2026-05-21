@@ -75,8 +75,8 @@ service cloud.firestore {
 
     // House Members Collection
     match /houseMembers/{memberId} {
-      // You can read the member list if you are a member of that house
-      allow read: if isAuthenticated() && isHouseMember(resource.data.houseId);
+      // You can read the member list if you are a member of that house, or if it is your own member record
+      allow read: if isAuthenticated() && (isHouseMember(resource.data.houseId) || resource.data.userId == request.auth.uid);
       
       // Creating a member is loosely allowed for the client-side Invite flow.
       // In a strict production setting, this should be blocked and handled by a Cloud Function.
